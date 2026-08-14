@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel Administrativo - Sistema de Inscripciones</title>
+  <link rel="stylesheet" href="/admin/css/admin.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- PANTALLA DE LOGIN -->
+  <div id="login-view" class="login-wrapper">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="login-badge">SEGURIDAD</div>
+        <h2>Panel Administrativo</h2>
+        <p>Ingrese sus credenciales de acceso autorizado</p>
+      </div>
+
+      <div id="login-error" class="alert-error" style="display:none;"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label>Usuario</label>
+          <input type="text" id="username" class="input-control" placeholder="admin" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label>Contraseña</label>
+          <input type="password" id="password" class="input-control" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <button type="submit" id="btn-login" class="btn-primary">
+          <span>Ingresar al Sistema</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- DASHBOARD PRINCIPAL -->
+  <div id="dashboard-view" class="dashboard-wrapper" style="display:none;">
+    
+    <!-- BARRA SUPERIOR -->
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-icon">⚙</div>
+        <div>
+          <h1>Sistema de Inscripciones</h1>
+          <span class="sub-brand">Panel de Control & Gestión de Difusión</span>
+        </div>
+      </div>
+      <div class="user-menu">
+        <span id="user-name-display" class="user-name">Administrador</span>
+        <button id="btn-logout" class="btn-sm btn-ghost">Cerrar Sesión</button>
+      </div>
+    </header>
+
+    <!-- NAVEGACIÓN Y TABS -->
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="registrations-tab">
+        📋 Inscritos General
+      </button>
+      <button class="tab-btn" data-tab="campaigns-tab">
+        📢 Campañas & Difusión Social
+      </button>
+    </nav>
+
+    <!-- CONTENIDO REGISTROS -->
+    <main id="registrations-tab" class="tab-content active">
+      
+      <!-- GRID DE ESTADÍSTICAS -->
+      <section class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-title">TOTAL INSCRITOS</div>
+          <div id="stat-total" class="stat-val">0</div>
+          <div class="stat-sub">Registros activos centralizados</div>
+        </div>
+        <div class="stat-card accent-blue">
+          <div class="stat-title">HOY REGISTRADOS</div>
+          <div id="stat-today" class="stat-val">0</div>
+          <div class="stat-sub">Inscripciones el día de hoy</div>
+        </div>
+        <div class="stat-card accent-green">
+          <div class="stat-title">CAMPAÑAS ACTIVAS</div>
+          <div id="stat-campaigns" class="stat-val">0</div>
+          <div class="stat-sub">Enlaces de difusión disponibles</div>
+        </div>
+      </section>
+
+      <!-- BARRA DE BÚSQUEDA Y FILTROS -->
+      <section class="filter-card">
+        <div class="filter-grid">
+          <div class="filter-item search-item">
+            <label>Buscar por Nombre / DNI / Celular</label>
+            <input type="text" id="filter-search" class="input-control" placeholder="Escriba para buscar...">
+          </div>
+          <div class="filter-item">
+            <label>Filtrar por Campaña</label>
+            <select id="filter-campaign" class="select-control">
+              <option value="">-- Todas las Campañas --</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label>Filtrar por Comunidad</label>
+            <select id="filter-comunidad" class="select-control">
+              <option value="">-- Todas las Comunidades --</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label>Fecha Desde</label>
+            <input type="date" id="filter-fecha-inicio" class="input-control">
+          </div>
+          <div class="filter-item">
+            <label>Fecha Hasta</label>
+            <input type="date" id="filter-fecha-fin" class="input-control">
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <div class="results-counter">
+            Mostrando <b id="count-filtered">0</b> registros
+          </div>
+          <div class="btn-group-actions">
+            <button id="btn-export-excel" class="btn-sm btn-excel">
+              📊 Exportar a Excel
+            </button>
+            <button id="btn-export-csv" class="btn-sm btn-csv">
+              📄 Exportar CSV
+            </button>
+            <button id="btn-print" class="btn-sm btn-print">
+              🖨 Imprimir Relación
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TABLA DE REGISTROS -->
+      <section class="table-container">
+        <table id="registrations-table">
+          <thead>
+            <tr>
+              <th>N° INSCRIPCIÓN</th>
+              <th>CAMPAÑA</th>
+              <th>NOMBRES Y APELLIDOS</th>
+              <th>DNI</th>
+              <th>CELULAR</th>
+              <th>COMUNIDAD / LOCALIDAD</th>
+              <th>OBSERVACIONES</th>
+              <th>FECHA Y HORA</th>
+              <th>ESTADO</th>
+              <th class="no-print">ACCIONES</th>
+            </tr>
+          </thead>
+          <tbody id="registrations-tbody">
+            <!-- Renderizado dinámico JS -->
+          </tbody>
+        </table>
+      </section>
+
+    </main>
+
+    <!-- CONTENIDO CAMPAÑAS -->
+    <main id="campaigns-tab" class="tab-content" style="display:none;">
+      <div class="section-header">
+        <div>
+          <h2>Campañas de Inscripción</h2>
+          <p>Crea enlaces públicos amigables y configura tarjetas de difusión para WhatsApp y Facebook</p>
+        </div>
+        <button id="btn-open-create-campaign" class="btn-primary" style="width:auto;padding:10px 18px;">
+          + Crear Nueva Campaña
+        </button>
+      </div>
+
+      <div id="campaigns-grid" class="campaigns-grid">
+        <!-- Renderizado dinámico JS -->
+      </div>
+    </main>
+
+  </div>
+
+  <!-- MODAL EDITAR REGISTRO -->
+  <div id="modal-edit-reg" class="modal-backdrop" style="display:none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Editar Inscrito</h3>
+        <button type="button" class="close-modal" onclick="closeModal('modal-edit-reg')">&times;</button>
+      </div>
+      <form id="form-edit-reg">
+        <input type="hidden" id="edit-reg-id">
+        <div class="form-group">
+          <label>Nombres</label>
+          <input type="text" id="edit-nombres" class="input-control" required>
+        </div>
+        <div class="form-group-row">
+          <div class="form-group">
+            <label>Apellido Paterno</label>
+            <input type="text" id="edit-apellido-paterno" class="input-control" required>
+          </div>
+          <div class="form-group">
+            <label>Apellido Materno</label>
+            <input type="text" id="edit-apellido-materno" class="input-control" required>
+          </div>
+        </div>
+        <div class="form-group-row">
+          <div class="form-group">
+            <label>Tiene DNI</label>
+            <select id="edit-tiene-dni" class="select-control">
+              <option value="1">Sí</option>
+              <option value="0">No</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>DNI</label>
+            <input type="text" id="edit-dni" class="input-control" maxlength="8">
+          </div>
+        </div>
+        <div class="form-group-row">
+          <div class="form-group">
+            <label>Celular</label>
+            <input type="text" id="edit-celular" class="input-control" required>
+          </div>
+          <div class="form-group">
+            <label>Comunidad / Localidad</label>
+            <input type="text" id="edit-comunidad" class="input-control" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Observaciones</label>
+          <textarea id="edit-observaciones" class="textarea-control" rows="2"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-sm btn-ghost" onclick="closeModal('modal-edit-reg')">Cancelar</button>
+          <button type="submit" class="btn-primary" style="width:auto;">Guardar Cambios</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL CREAR/EDITAR CAMPAÑA -->
+  <div id="modal-campaign" class="modal-backdrop" style="display:none;">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3 id="modal-campaign-title">Nueva Campaña de Inscripción</h3>
+        <button type="button" class="close-modal" onclick="closeModal('modal-campaign')">&times;</button>
+      </div>
+      <form id="form-campaign">
+        <input type="hidden" id="camp-id">
+
+        <div class="form-group">
+          <label>Texto de Encabezado Superior <span style="color:#94a3b8">(Movimiento / Organización)</span></label>
+          <input type="text" id="camp-header-text" class="input-control" placeholder="AHORA NACIÓN" required>
+        </div>
+        
+        <div class="form-group-row">
+          <div class="form-group" style="flex:2">
+            <label>Título de la Campaña <span class="req">*</span></label>
+            <input type="text" id="camp-title" class="input-control" placeholder="Ej. Campaña de Registro DNI 2026" required>
+          </div>
+          <div class="form-group" style="flex:1">
+            <label>Categoría <span class="req">*</span></label>
+            <select id="camp-category" class="select-control">
+              <option value="Inscripción">Inscripción General</option>
+              <option value="DNI">Campaña DNI</option>
+              <option value="Reunión">Reunión</option>
+              <option value="Capacitación">Capacitación</option>
+              <option value="Evento">Evento</option>
+              <option value="Encuesta">Encuesta</option>
+              <option value="Registro Comunitario">Registro Comunitario</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Descripción / Instrucción del Formulario</label>
+          <textarea id="camp-description" class="textarea-control" rows="2" placeholder="Completa tus datos en nuestro formulario..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Mensaje Predeterminado para Compartir por WhatsApp y Facebook <span class="req">*</span></label>
+          <textarea id="camp-share-message" class="textarea-control" rows="4" required></textarea>
+          <span style="font-size:11px;color:#94a3b8;margin-top:4px;">Usa el comodín <b>[ENLACE]</b> donde deseas que aparezca el link del formulario.</span>
+        </div>
+
+        <h4 style="margin:16px 0 10px;font-size:14px;color:#38bdf8;">Vista Previa para Redes Sociales (Open Graph)</h4>
+
+        <div class="form-group-row">
+          <div class="form-group">
+            <label>Título OG para Tarjeta Social</label>
+            <input type="text" id="camp-og-title" class="input-control" placeholder="Ej. 📢 REGISTRO DE PARTICIPANTES">
+          </div>
+          <div class="form-group">
+            <label>Imagen OG (URL de Imagen Promocional)</label>
+            <input type="url" id="camp-og-image" class="input-control" placeholder="https://ejemplo.com/imagen.jpg">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Descripción OG para Tarjeta Social</label>
+          <input type="text" id="camp-og-description" class="input-control" placeholder="Descripción breve para la vista previa de WhatsApp">
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn-sm btn-ghost" onclick="closeModal('modal-campaign')">Cancelar</button>
+          <button type="submit" class="btn-primary" style="width:auto;">Guardar Campaña</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/admin/js/admin.js"></script>
+</body>
+</html>
