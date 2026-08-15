@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Administración – Ahora Nación</title><link rel="stylesheet" href="/admin/css/admin.css"></head>
+<body>
+<div id="login" class="screen"><div class="login"><h1>AHORA NACIÓN</h1><p>Panel de administración</p><form id="loginForm"><input id="username" placeholder="Usuario" required><input id="password" type="password" placeholder="Contraseña" required><button>Ingresar</button><div id="loginMsg"></div></form></div></div>
+<div id="panel" class="hidden">
+<header><div><b>AHORA NACIÓN</b><span> Panel de administración</span></div><button id="logout">Salir</button></header>
+<main>
+<section class="stats"><div><b id="total">0</b><span>Registros activos</span></div><div><b id="today">0</b><span>Registros hoy</span></div><div><b id="campaignCount">0</b><span>Campañas activas</span></div></section>
+<section class="toolbar"><input id="search" placeholder="Buscar nombre, DNI, celular o código"><select id="campaignFilter"><option value="">Todas las campañas</option></select><input id="communityFilter" placeholder="Comunidad"><button id="searchBtn">Buscar</button><button id="excelBtn">Excel</button><button id="csvBtn">CSV</button></section>
+<section class="card"><h2>Registros</h2><div class="tableWrap"><table><thead><tr><th>Código</th><th>Nombre</th><th>DNI</th><th>Celular</th><th>Comunidad</th><th>Campaña</th><th>Fecha</th><th>Estado</th><th>Acción</th></tr></thead><tbody id="rows"></tbody></table></div></section>
+<section class="card"><h2>Campañas</h2><button id="newCampaign">Nueva campaña</button><div id="campaigns"></div></section>
+</main>
+</div>
+<div id="modal" class="hidden"></div>
+<script src="/admin/js/admin.js"></script></body></html>
