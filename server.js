@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -5,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const XLSX = require('xlsx');
 const db = require('./database');
+const supabase = require('./supabase');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -18,13 +21,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 function nowLocal() {
   const d = new Date();
+
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Lima',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
     hour12: false
   }).formatToParts(d);
-  const get = (type) => parts.find(p => p.type === type)?.value;
+
+  const get = type => parts.find(p => p.type === type)?.value;
+
   return {
     date: `${get('year')}-${get('month')}-${get('day')}`,
     time: `${get('hour')}:${get('minute')}:${get('second')}`,
@@ -38,40 +48,81 @@ function clean(v) {
 
 function escapeHtml(v) {
   return String(v ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
 
 function authMiddleware(req, res, next) {
   const h = req.headers.authorization || '';
-  if (!h.startsWith('Bearer ')) return res.status(401).json({ error: 'Acceso denegado.' });
+
+  if (!h.startsWith('Bearer ')) {
+    return res.status(401).json({
+      error: 'Acceso denegado.'
+    });
+  }
+
   try {
     req.user = jwt.verify(h.slice(7), JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({ error: 'Sesión inválida o expirada.' });
+    return res.status(401).json({
+      error: 'Sesión inválida o expirada.'
+    });
   }
 }
 
-// Dynamic campaign page + Open Graph.
-app.get(['/c/:slug', '/:slug'], (req, res, next) => {
-  if (req.path.startsWith('/api/') || req.path.includes('.')) return next();
+/* ============================================================
+   PÁGINA PÚBLICA DE CAMPAÑA
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
 
-  const slug = req.params.slug || 'campana-general';
-  const campaign = db.prepare(
-    'SELECT * FROM campaigns WHERE slug = ? AND is_active = 1'
-  ).get(slug) || db.prepare(
-    'SELECT * FROM campaigns WHERE is_active = 1 ORDER BY id ASC LIMIT 1'
-  ).get();
+app.get(['/c/:slug', '/:slug'], async (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.includes('.')) {
+    return next();
+  }
 
-  if (!campaign) return res.status(404).send('No hay campañas activas.');
+  try {
+    const slug = req.params.slug || 'campana-general';
 
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-  const host = req.get('host');
-  const fullUrl = `${protocol}://${host}${req.originalUrl}`;
+    let { data: campaign, error } = await supabase
+      .from('campaigns')
+      .select('*')
+      .eq('slug', slug)
+      .eq('is_active', true)
+      .maybeSingle();
 
-  res.send(`<!doctype html>
+    if (error) {
+      throw error;
+    }
+
+    if (!campaign) {
+      const fallback = await supabase
+        .from('campaigns')
+        .select('*')
+        .eq('is_active', true)
+        .order('id', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (fallback.error) {
+        throw fallback.error;
+      }
+
+      campaign = fallback.data;
+    }
+
+    if (!campaign) {
+      return res.status(404).send('No hay campañas activas.');
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.get('host');
+    const fullUrl = `${protocol}://${host}${req.originalUrl}`;
+
+    res.send(`<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -90,415 +141,1727 @@ app.get(['/c/:slug', '/:slug'], (req, res, next) => {
 <script src="/js/app.js"></script>
 </body>
 </html>`);
+
+  } catch (err) {
+    console.error('ERROR página pública:', err);
+    res.status(500).send('No se pudo consultar la campaña.');
+  }
 });
 
-// Public campaign API
-app.get('/api/public/campaign/:identifier', (req, res) => {
-  const { identifier } = req.params;
-  let campaign;
+/* ============================================================
+   API PÚBLICA — CAMPAÑAS
+   ============================================================ */
 
-  if (/^\d+$/.test(identifier)) {
-    campaign = db.prepare(
-      'SELECT * FROM campaigns WHERE id = ? AND is_active = 1'
-    ).get(Number(identifier));
-  } else {
-    campaign = db.prepare(
-      'SELECT * FROM campaigns WHERE slug = ? AND is_active = 1'
-    ).get(identifier);
+app.get('/api/public/campaign/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+
+    let query = supabase
+      .from('campaigns')
+      .select('*')
+      .eq('is_active', true);
+
+    query = /^\d+$/.test(identifier)
+      ? query.eq('id', Number(identifier))
+      : query.eq('slug', identifier);
+
+    let { data, error } = await query.maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      const fallback = await supabase
+        .from('campaigns')
+        .select('*')
+        .eq('is_active', true)
+        .order('id', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (fallback.error) {
+        throw fallback.error;
+      }
+
+      data = fallback.data;
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'No hay campañas activas.'
+      });
+    }
+
+    res.json(data);
+
+  } catch (err) {
+    console.error('ERROR /api/public/campaign/:identifier:', err);
+
+    res.status(500).json({
+      error: 'No se pudo consultar la campaña.'
+    });
+  }
+});
+
+app.get('/api/public/campaigns', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select(`
+        id,
+        slug,
+        title,
+        category,
+        header_text,
+        description,
+        share_message,
+        og_title,
+        og_description,
+        og_image,
+        is_active,
+        created_at
+      `)
+      .eq('is_active', true)
+      .order('title', { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    res.json(data || []);
+
+  } catch (err) {
+    console.error('ERROR /api/public/campaigns:', err);
+
+    res.status(500).json({
+      error: 'No se pudieron consultar las campañas.'
+    });
+  }
+});
+
+/* ============================================================
+   REGISTRO PÚBLICO
+   SUPABASE + RPC ATÓMICA
+   ============================================================ */
+
+const registerParticipant = async data => {
+
+  const { data: campaign, error: campaignError } = await supabase
+    .from('campaigns')
+    .select('id, title, share_message, slug')
+    .eq('id', data.campaign_id)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (campaignError) {
+    throw new Error('SUPABASE_ERROR');
   }
 
   if (!campaign) {
-    campaign = db.prepare(
-      'SELECT * FROM campaigns WHERE is_active = 1 ORDER BY id ASC LIMIT 1'
-    ).get();
-  }
-
-  if (!campaign) return res.status(404).json({ error: 'No hay campañas activas.' });
-  res.json(campaign);
-});
-
-app.get('/api/public/campaigns', (req, res) => {
-  res.json(db.prepare(
-    'SELECT id, slug, title, category FROM campaigns WHERE is_active = 1 ORDER BY title ASC'
-  ).all());
-});
-
-// Public registration with transaction-safe sequential numbering.
-const registerParticipant = db.transaction((data) => {
-  const campaign = db.prepare(
-    'SELECT id, title, share_message, slug FROM campaigns WHERE id = ? AND is_active = 1'
-  ).get(data.campaign_id);
-
-  if (!campaign) throw new Error('CAMPAIGN_NOT_FOUND');
-
-  if (data.tiene_dni) {
-    const existing = db.prepare(`
-      SELECT id, reg_number
-      FROM registrations
-      WHERE campaign_id = ? AND tiene_dni = 1 AND dni = ? AND estado = 'ACTIVO'
-    `).get(data.campaign_id, data.dni);
-
-    if (existing) throw new Error(`DUPLICATE_DNI:${existing.reg_number}`);
+    throw new Error('CAMPAIGN_NOT_FOUND');
   }
 
   const { date, time, year } = nowLocal();
 
-  let counter = db.prepare(
-    'SELECT last_number FROM registration_counters WHERE campaign_id = ? AND year = ?'
-  ).get(data.campaign_id, year);
+  const { data: result, error: registerError } =
+    await supabase.rpc(
+      'register_participant_atomic',
+      {
+        p_campaign_id: data.campaign_id,
+        p_nombres: data.nombres,
+        p_apellido_paterno: data.apellido_paterno,
+        p_apellido_materno: data.apellido_materno,
+        p_tiene_dni: Boolean(data.tiene_dni),
+        p_dni: data.dni,
+        p_celular: data.celular,
+        p_comunidad: data.comunidad,
+        p_observaciones: data.observaciones,
+        p_fecha_registro: date,
+        p_hora_registro: time,
+        p_year: year
+      }
+    );
 
-  if (!counter) {
-    db.prepare(`
-      INSERT INTO registration_counters (campaign_id, year, last_number)
-      VALUES (?, ?, 0)
-    `).run(data.campaign_id, year);
-    counter = { last_number: 0 };
+  if (registerError) {
+
+    console.error(
+      'ERROR REGISTRO ATÓMICO SUPABASE:',
+      JSON.stringify(registerError, null, 2)
+    );
+
+    if (
+      registerError.message &&
+      registerError.message.startsWith('DUPLICATE_DNI:')
+    ) {
+      throw new Error(registerError.message);
+    }
+
+    throw new Error(
+      `SUPABASE_REGISTER_ERROR:${registerError.message}`
+    );
   }
 
-  const next = Number(counter.last_number) + 1;
-  db.prepare(`
-    UPDATE registration_counters
-    SET last_number = ?
-    WHERE campaign_id = ? AND year = ?
-  `).run(next, data.campaign_id, year);
+  if (!result || !result.length) {
+    throw new Error('SUPABASE_EMPTY_RESULT');
+  }
 
-  const regNumber = `INS-${year}-${String(next).padStart(4, '0')}`;
-
-  const result = db.prepare(`
-    INSERT INTO registrations
-    (reg_number, campaign_id, nombres, apellido_paterno, apellido_materno,
-     tiene_dni, dni, celular, comunidad, observaciones,
-     fecha_registro, hora_registro, estado)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO')
-  `).run(
-    regNumber, data.campaign_id, data.nombres, data.apellido_paterno,
-    data.apellido_materno, data.tiene_dni ? 1 : 0, data.dni,
-    data.celular, data.comunidad, data.observaciones, date, time
-  );
+  const registered = result[0];
 
   return {
-    id: result.lastInsertRowid,
-    reg_number: regNumber,
-    fecha_registro: date,
-    hora_registro: time,
+    id: registered.id,
+    reg_number: registered.reg_number,
+    fecha_registro: registered.fecha_registro,
+    hora_registro: registered.hora_registro,
     campaign_title: campaign.title,
     share_message: campaign.share_message,
     campaign_slug: campaign.slug
   };
-});
+};
 
-app.post('/api/public/register', (req, res) => {
+app.post('/api/public/register', async (req, res) => {
+
   try {
+
     const data = {
       campaign_id: Number(req.body.campaign_id),
+
       nombres: clean(req.body.nombres),
-      apellido_paterno: clean(req.body.apellido_paterno),
-      apellido_materno: clean(req.body.apellido_materno),
-      tiene_dni: ['true', '1', 1, true].includes(req.body.tiene_dni),
-      dni: clean(req.body.dni).replace(/\D/g, ''),
-      celular: clean(req.body.celular).replace(/\s+/g, ''),
-      comunidad: clean(req.body.comunidad),
-      observaciones: clean(req.body.observaciones)
+
+      apellido_paterno:
+        clean(req.body.apellido_paterno),
+
+      apellido_materno:
+        clean(req.body.apellido_materno),
+
+      tiene_dni:
+        ['true', '1', 1, true]
+          .includes(req.body.tiene_dni),
+
+      dni:
+        clean(req.body.dni)
+          .replace(/\D/g, ''),
+
+      celular:
+        clean(req.body.celular)
+          .replace(/\s+/g, ''),
+
+      comunidad:
+        clean(req.body.comunidad),
+
+      observaciones:
+        clean(req.body.observaciones)
     };
 
-    if (!data.campaign_id || !data.nombres || !data.apellido_paterno ||
-        !data.apellido_materno || !data.celular || !data.comunidad) {
-      return res.status(400).json({ error: 'Completa todos los campos obligatorios.' });
+    if (
+      !data.campaign_id ||
+      !data.nombres ||
+      !data.apellido_paterno ||
+      !data.apellido_materno ||
+      !data.celular ||
+      !data.comunidad
+    ) {
+      return res.status(400).json({
+        error: 'Completa todos los campos obligatorios.'
+      });
     }
 
-    if (data.tiene_dni && !/^\d{8}$/.test(data.dni)) {
-      return res.status(400).json({ error: 'El DNI debe contener exactamente 8 dígitos.' });
+    if (
+      data.tiene_dni &&
+      !/^\d{8}$/.test(data.dni)
+    ) {
+      return res.status(400).json({
+        error: 'El DNI debe contener exactamente 8 dígitos.'
+      });
     }
 
     if (!/^\d{9}$/.test(data.celular)) {
-      return res.status(400).json({ error: 'El celular debe contener 9 dígitos.' });
+      return res.status(400).json({
+        error: 'El celular debe contener 9 dígitos.'
+      });
     }
 
-    const result = registerParticipant(data);
-    res.status(201).json({ success: true, ...result });
+    const result = await registerParticipant(data);
+
+    res.status(201).json({
+      success: true,
+      ...result
+    });
+
   } catch (err) {
+
     if (err.message === 'CAMPAIGN_NOT_FOUND') {
-      return res.status(400).json({ error: 'La campaña no está activa.' });
+      return res.status(400).json({
+        error: 'La campaña no está activa.'
+      });
     }
+
     if (err.message.startsWith('DUPLICATE_DNI:')) {
+
       const reg = err.message.split(':')[1];
-      return res.status(409).json({ error: `Este DNI ya está registrado en esta campaña. Código: ${reg}.` });
+
+      return res.status(409).json({
+        error:
+          `Este DNI ya está registrado en esta campaña. Código: ${reg}.`
+      });
     }
+
     console.error(err);
-    res.status(500).json({ error: 'No se pudo guardar el registro. Intenta nuevamente.' });
+
+    res.status(500).json({
+      error:
+        'No se pudo guardar el registro. Intenta nuevamente.'
+    });
   }
 });
 
-// Admin login
+/* ============================================================
+   ADMIN LOGIN
+   SQLITE SOLO PARA USUARIOS ADMINISTRATIVOS
+   ============================================================ */
+
 app.post('/api/admin/login', (req, res) => {
+
   const username = clean(req.body.username);
   const password = String(req.body.password || '');
-  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
 
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-    return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+  const user = db
+    .prepare(
+      'SELECT * FROM users WHERE username = ?'
+    )
+    .get(username);
+
+  if (
+    !user ||
+    !bcrypt.compareSync(
+      password,
+      user.password_hash
+    )
+  ) {
+    return res.status(401).json({
+      error: 'Usuario o contraseña incorrectos.'
+    });
   }
 
   const token = jwt.sign(
-    { id: user.id, username: user.username, name: user.name, role: user.role },
+    {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role
+    },
     JWT_SECRET,
-    { expiresIn: '12h' }
-  );
-
-  res.json({ token, user: { id: user.id, username: user.username, name: user.name, role: user.role } });
-});
-
-app.get('/api/admin/me', authMiddleware, (req, res) => res.json({ user: req.user }));
-
-app.get('/api/admin/stats', authMiddleware, (req, res) => {
-  const total = db.prepare("SELECT COUNT(*) AS count FROM registrations WHERE estado='ACTIVO'").get().count;
-  const campaigns = db.prepare("SELECT COUNT(*) AS count FROM campaigns WHERE is_active=1").get().count;
-  const today = nowLocal().date;
-  const todayCount = db.prepare(
-    "SELECT COUNT(*) AS count FROM registrations WHERE fecha_registro=? AND estado='ACTIVO'"
-  ).get(today).count;
-  const communities = db.prepare(`
-    SELECT comunidad, COUNT(*) AS count
-    FROM registrations
-    WHERE estado='ACTIVO'
-    GROUP BY comunidad
-    ORDER BY count DESC, comunidad ASC
-    LIMIT 10
-  `).all();
-
-  const campaignStats = db.prepare(`
-    SELECT c.id, c.title, c.category, c.slug,
-           COUNT(CASE WHEN r.estado='ACTIVO' THEN 1 END) AS total_registros
-    FROM campaigns c
-    LEFT JOIN registrations r ON r.campaign_id=c.id
-    GROUP BY c.id
-    ORDER BY c.created_at DESC
-  `).all();
-
-  res.json({ totalRegistrations: total, activeCampaigns: campaigns, todayRegistrations: todayCount, topCommunities: communities, campaignStats });
-});
-
-app.get('/api/admin/registrations', authMiddleware, (req, res) => {
-  const { search='', campaign_id='', comunidad='', fecha_inicio='', fecha_fin='', estado='' } = req.query;
-  let query = `
-    SELECT r.*, c.title AS campaign_title, c.category AS campaign_category
-    FROM registrations r
-    JOIN campaigns c ON c.id=r.campaign_id
-    WHERE 1=1
-  `;
-  const params = [];
-
-  if (search) {
-    query += ` AND (
-      r.nombres LIKE ? OR r.apellido_paterno LIKE ? OR r.apellido_materno LIKE ?
-      OR r.dni LIKE ? OR r.celular LIKE ? OR r.reg_number LIKE ?
-    )`;
-    const s = `%${clean(search)}%`;
-    params.push(s,s,s,s,s,s);
-  }
-  if (campaign_id) { query += ' AND r.campaign_id=?'; params.push(Number(campaign_id)); }
-  if (comunidad) { query += ' AND r.comunidad LIKE ?'; params.push(`%${clean(comunidad)}%`); }
-  if (fecha_inicio) { query += ' AND r.fecha_registro>=?'; params.push(fecha_inicio); }
-  if (fecha_fin) { query += ' AND r.fecha_registro<=?'; params.push(fecha_fin); }
-  if (estado) { query += ' AND r.estado=?'; params.push(estado); }
-
-  query += ' ORDER BY r.id DESC';
-  res.json(db.prepare(query).all(...params));
-});
-
-app.get('/api/admin/communities', authMiddleware, (req, res) => {
-  const rows = db.prepare(`
-    SELECT DISTINCT comunidad FROM registrations
-    WHERE comunidad IS NOT NULL AND comunidad <> ''
-    ORDER BY comunidad ASC
-  `).all();
-  res.json(rows.map(x => x.comunidad));
-});
-
-app.put('/api/admin/registrations/:id', authMiddleware, (req, res) => {
-  const id = Number(req.params.id);
-  const current = db.prepare('SELECT id FROM registrations WHERE id=?').get(id);
-  if (!current) return res.status(404).json({ error: 'Registro no encontrado.' });
-
-  const b = req.body;
-  const nombres = clean(b.nombres);
-  const paterno = clean(b.apellido_paterno);
-  const materno = clean(b.apellido_materno);
-  const tieneDni = ['true','1',1,true].includes(b.tiene_dni);
-  const dni = clean(b.dni).replace(/\D/g,'');
-  const celular = clean(b.celular).replace(/\s+/g,'');
-  const comunidad = clean(b.comunidad);
-  const observaciones = clean(b.observaciones);
-  const estado = b.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO';
-
-  if (!nombres || !paterno || !materno || !celular || !comunidad) {
-    return res.status(400).json({ error: 'Faltan campos obligatorios.' });
-  }
-  if (tieneDni && !/^\d{8}$/.test(dni)) {
-    return res.status(400).json({ error: 'DNI inválido.' });
-  }
-
-  try {
-    db.prepare(`
-      UPDATE registrations
-      SET nombres=?, apellido_paterno=?, apellido_materno=?, tiene_dni=?,
-          dni=?, celular=?, comunidad=?, observaciones=?, estado=?
-      WHERE id=?
-    `).run(nombres,paterno,materno,tieneDni?1:0,dni,celular,comunidad,observaciones,estado,id);
-    res.json({ success: true, message: 'Registro actualizado.' });
-  } catch (err) {
-    if (String(err.message).includes('UNIQUE')) {
-      return res.status(409).json({ error: 'El DNI ya existe en esta campaña.' });
+    {
+      expiresIn: '12h'
     }
-    res.status(500).json({ error: 'No se pudo actualizar.' });
-  }
-});
-
-app.patch('/api/admin/registrations/:id/status', authMiddleware, (req, res) => {
-  const id = Number(req.params.id);
-  const row = db.prepare('SELECT estado FROM registrations WHERE id=?').get(id);
-  if (!row) return res.status(404).json({ error: 'Registro no encontrado.' });
-  const estado = req.body.estado === 'INACTIVO'
-    ? 'INACTIVO'
-    : req.body.estado === 'ACTIVO'
-      ? 'ACTIVO'
-      : (row.estado === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO');
-  db.prepare('UPDATE registrations SET estado=? WHERE id=?').run(estado,id);
-  res.json({ success:true, newStatus: estado });
-});
-
-// Campaign CRUD
-app.get('/api/admin/campaigns', authMiddleware, (req, res) => {
-  const rows = db.prepare(`
-    SELECT c.*, COUNT(CASE WHEN r.estado='ACTIVO' THEN 1 END) AS total_registros
-    FROM campaigns c
-    LEFT JOIN registrations r ON r.campaign_id=c.id
-    GROUP BY c.id
-    ORDER BY c.created_at DESC
-  `).all();
-  res.json(rows);
-});
-
-app.post('/api/admin/campaigns', authMiddleware, (req, res) => {
-  try {
-    const b = req.body;
-    const title = clean(b.title);
-    const share = clean(b.share_message);
-    if (!title || !share) return res.status(400).json({ error:'Título y mensaje de difusión son obligatorios.' });
-
-    const base = clean(b.slug || title).toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-      .replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
-    const slug = `${base || 'campana'}-${Date.now().toString().slice(-6)}`;
-
-    const result = db.prepare(`
-      INSERT INTO campaigns
-      (slug,header_text,title,description,category,share_message,og_title,og_description,og_image,is_active)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      slug, clean(b.header_text) || 'AHORA NACIÓN', title, clean(b.description),
-      clean(b.category) || 'Inscripción', share, clean(b.og_title) || title,
-      clean(b.og_description) || clean(b.description), clean(b.og_image) || '/ahora-nacion-logo.svg',
-      b.is_active === false ? 0 : 1
-    );
-    res.status(201).json({ success:true, id:result.lastInsertRowid, slug });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error:'No se pudo crear la campaña.' });
-  }
-});
-
-app.put('/api/admin/campaigns/:id', authMiddleware, (req, res) => {
-  const id = Number(req.params.id);
-  const b = req.body;
-  const existing = db.prepare('SELECT id FROM campaigns WHERE id=?').get(id);
-  if (!existing) return res.status(404).json({ error:'Campaña no encontrada.' });
-
-  db.prepare(`
-    UPDATE campaigns SET
-      header_text=?, title=?, description=?, category=?, share_message=?,
-      og_title=?, og_description=?, og_image=?, is_active=?
-    WHERE id=?
-  `).run(
-    clean(b.header_text) || 'AHORA NACIÓN',
-    clean(b.title),
-    clean(b.description),
-    clean(b.category) || 'Inscripción',
-    clean(b.share_message),
-    clean(b.og_title),
-    clean(b.og_description),
-    clean(b.og_image),
-    b.is_active ? 1 : 0,
-    id
   );
-  res.json({ success:true, message:'Campaña actualizada.' });
+
+  res.json({
+    token,
+
+    user: {
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role
+    }
+  });
 });
 
-function exportRows(queryParams) {
-  const { campaign_id='', search='', comunidad='' } = queryParams;
-  let query = `
-    SELECT
-      r.reg_number AS "N° Inscripción",
-      c.title AS "Campaña",
-      c.category AS "Categoría",
-      r.nombres AS "Nombres",
-      r.apellido_paterno AS "Apellido Paterno",
-      r.apellido_materno AS "Apellido Materno",
-      CASE WHEN r.tiene_dni=1 THEN 'Sí' ELSE 'No' END AS "Tiene DNI",
-      r.dni AS "DNI",
-      r.celular AS "Celular",
-      r.comunidad AS "Comunidad/Localidad",
-      r.observaciones AS "Observaciones",
-      r.fecha_registro AS "Fecha Registro",
-      r.hora_registro AS "Hora Registro",
-      r.estado AS "Estado"
-    FROM registrations r
-    JOIN campaigns c ON c.id=r.campaign_id
-    WHERE 1=1
-  `;
-  const params=[];
-  if (campaign_id) { query += ' AND r.campaign_id=?'; params.push(Number(campaign_id)); }
-  if (search) {
-    query += ' AND (r.nombres LIKE ? OR r.apellido_paterno LIKE ? OR r.apellido_materno LIKE ? OR r.dni LIKE ? OR r.celular LIKE ?)';
-    const s=`%${clean(search)}%`; params.push(s,s,s,s,s);
-  }
-  if (comunidad) { query += ' AND r.comunidad LIKE ?'; params.push(`%${clean(comunidad)}%`); }
-  query += ' ORDER BY r.id DESC';
-  return db.prepare(query).all(...params);
-}
+app.get('/api/admin/me', authMiddleware, (req, res) => {
+  res.json({
+    user: req.user
+  });
+});
+/* ============================================================
+   ADMIN — ESTADÍSTICAS
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
 
-app.get('/api/admin/export/excel', authMiddleware, (req,res) => {
+app.get('/api/admin/stats', authMiddleware, async (req, res) => {
+
   try {
-    const rows=exportRows(req.query);
-    const ws=XLSX.utils.json_to_sheet(rows);
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,ws,'Inscritos');
-    const buffer=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});
-    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition',`attachment; filename="Inscritos-${nowLocal().date}.xlsx"`);
-    res.send(buffer);
-  } catch(err) {
-    console.error(err); res.status(500).json({error:'Error al generar Excel.'});
+
+    const today = nowLocal().date;
+
+    const [
+      registrationsResult,
+      campaignsResult,
+      todayResult,
+      communitiesResult,
+      campaignResult,
+      campaignRegsResult
+    ] = await Promise.all([
+
+      supabase
+        .from('registrations')
+        .select('id', {
+          count: 'exact',
+          head: true
+        })
+        .eq('estado', 'ACTIVO'),
+
+      supabase
+        .from('campaigns')
+        .select('id', {
+          count: 'exact',
+          head: true
+        })
+        .eq('is_active', true),
+
+      supabase
+        .from('registrations')
+        .select('id', {
+          count: 'exact',
+          head: true
+        })
+        .eq('estado', 'ACTIVO')
+        .eq('fecha_registro', today),
+
+      supabase
+        .from('registrations')
+        .select('comunidad')
+        .eq('estado', 'ACTIVO')
+        .not('comunidad', 'is', null)
+        .neq('comunidad', ''),
+
+      supabase
+        .from('campaigns')
+        .select(
+          'id, title, category, slug, created_at'
+        )
+        .order('created_at', {
+          ascending: false
+        }),
+
+      supabase
+        .from('registrations')
+        .select('campaign_id, estado')
+    ]);
+
+    for (const result of [
+      registrationsResult,
+      campaignsResult,
+      todayResult,
+      communitiesResult,
+      campaignResult,
+      campaignRegsResult
+    ]) {
+      if (result.error) {
+        throw result.error;
+      }
+    }
+
+    /*
+     * Contar comunidades
+     */
+
+    const communityMap = new Map();
+
+    for (const row of communitiesResult.data || []) {
+
+      const comunidad = clean(row.comunidad);
+
+      if (!comunidad) {
+        continue;
+      }
+
+      communityMap.set(
+        comunidad,
+        (communityMap.get(comunidad) || 0) + 1
+      );
+    }
+
+    const topCommunities =
+      Array.from(communityMap.entries())
+        .map(([comunidad, count]) => ({
+          comunidad,
+          count
+        }))
+        .sort((a, b) => {
+
+          if (b.count !== a.count) {
+            return b.count - a.count;
+          }
+
+          return a.comunidad.localeCompare(
+            b.comunidad
+          );
+
+        })
+        .slice(0, 10);
+
+    /*
+     * Contar registros por campaña
+     */
+
+    const campaignCounts = new Map();
+
+    for (
+      const row of
+      campaignRegsResult.data || []
+    ) {
+
+      if (row.estado !== 'ACTIVO') {
+        continue;
+      }
+
+      const campaignId =
+        Number(row.campaign_id);
+
+      campaignCounts.set(
+        campaignId,
+        (campaignCounts.get(campaignId) || 0) + 1
+      );
+    }
+
+    const campaignStats =
+      (campaignResult.data || []).map(campaign => ({
+
+        id: campaign.id,
+
+        title: campaign.title,
+
+        category: campaign.category,
+
+        slug: campaign.slug,
+
+        total_registros:
+          campaignCounts.get(
+            Number(campaign.id)
+          ) || 0
+
+      }));
+
+    res.json({
+
+      totalRegistrations:
+        registrationsResult.count || 0,
+
+      activeCampaigns:
+        campaignsResult.count || 0,
+
+      todayRegistrations:
+        todayResult.count || 0,
+
+      topCommunities,
+
+      campaignStats
+
+    });
+
+  } catch (err) {
+
+    console.error(
+      'ERROR SUPABASE /api/admin/stats:',
+      JSON.stringify(err, null, 2)
+    );
+
+    res.status(500).json({
+      error:
+        'No se pudieron obtener las estadísticas.'
+    });
   }
+
 });
 
-app.get('/api/admin/export/csv', authMiddleware, (req,res) => {
-  try {
-    const rows=exportRows(req.query);
-    const headers=['N° Inscripción','Campaña','Categoría','Nombres','Apellido Paterno','Apellido Materno','Tiene DNI','DNI','Celular','Comunidad/Localidad','Observaciones','Fecha Registro','Hora Registro','Estado'];
-    const csv=[headers,...rows.map(r=>headers.map(h=>r[h] ?? ''))]
-      .map(row=>row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    res.setHeader('Content-Type','text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition',`attachment; filename="Inscritos-${nowLocal().date}.csv"`);
-    res.send('\uFEFF'+csv);
-  } catch(err) {
-    console.error(err); res.status(500).json({error:'Error al generar CSV.'});
+
+/* ============================================================
+   ADMIN — LISTADO DE REGISTROS
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.get(
+  '/api/admin/registrations',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const {
+        search = '',
+        campaign_id = '',
+        comunidad = '',
+        fecha_inicio = '',
+        fecha_fin = '',
+        estado = ''
+      } = req.query;
+
+      let query = supabase
+        .from('registrations')
+        .select(`
+          *,
+          campaigns!inner (
+            title,
+            category
+          )
+        `)
+        .order('id', {
+          ascending: false
+        });
+
+      /*
+       * Filtro por campaña
+       */
+
+      if (campaign_id) {
+
+        query = query.eq(
+          'campaign_id',
+          Number(campaign_id)
+        );
+
+      }
+
+      /*
+       * Filtro por comunidad
+       */
+
+      if (comunidad) {
+
+        query = query.ilike(
+          'comunidad',
+          `%${clean(comunidad)}%`
+        );
+
+      }
+
+      /*
+       * Filtro por fechas
+       */
+
+      if (fecha_inicio) {
+
+        query = query.gte(
+          'fecha_registro',
+          fecha_inicio
+        );
+
+      }
+
+      if (fecha_fin) {
+
+        query = query.lte(
+          'fecha_registro',
+          fecha_fin
+        );
+
+      }
+
+      /*
+       * Filtro por estado
+       */
+
+      if (estado) {
+
+        query = query.eq(
+          'estado',
+          estado
+        );
+
+      }
+
+      /*
+       * Búsqueda general
+       */
+
+      if (search) {
+
+        const s = clean(search);
+
+        query = query.or([
+          `nombres.ilike.%${s}%`,
+          `apellido_paterno.ilike.%${s}%`,
+          `apellido_materno.ilike.%${s}%`,
+          `dni.ilike.%${s}%`,
+          `celular.ilike.%${s}%`,
+          `reg_number.ilike.%${s}%`
+        ].join(','));
+
+      }
+
+      const {
+        data,
+        error
+      } = await query;
+
+      if (error) {
+        throw error;
+      }
+
+      const rows =
+        (data || []).map(r => ({
+
+          id: r.id,
+
+          reg_number:
+            r.reg_number,
+
+          campaign_id:
+            r.campaign_id,
+
+          campaign_title:
+            r.campaigns?.title || '',
+
+          campaign_category:
+            r.campaigns?.category || '',
+
+          nombres:
+            r.nombres,
+
+          apellido_paterno:
+            r.apellido_paterno,
+
+          apellido_materno:
+            r.apellido_materno,
+
+          tiene_dni:
+            r.tiene_dni,
+
+          dni:
+            r.dni,
+
+          celular:
+            r.celular,
+
+          comunidad:
+            r.comunidad,
+
+          observaciones:
+            r.observaciones,
+
+          fecha_registro:
+            r.fecha_registro,
+
+          hora_registro:
+            r.hora_registro,
+
+          estado:
+            r.estado,
+
+          created_at:
+            r.created_at
+
+        }));
+
+      res.json(rows);
+
+    } catch (err) {
+
+      console.error(
+        'ERROR /api/admin/registrations:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudieron consultar los registros.'
+      });
+
+    }
+
   }
+);
+
+
+/* ============================================================
+   ADMIN — COMUNIDADES
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.get(
+  '/api/admin/communities',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('registrations')
+        .select('comunidad')
+        .not(
+          'comunidad',
+          'is',
+          null
+        )
+        .neq(
+          'comunidad',
+          ''
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      const communities =
+        [
+          ...new Set(
+            (data || [])
+              .map(row =>
+                clean(row.comunidad)
+              )
+              .filter(Boolean)
+          )
+        ]
+        .sort((a, b) =>
+          a.localeCompare(b)
+        );
+
+      res.json(communities);
+
+    } catch (err) {
+
+      console.error(
+        'ERROR /api/admin/communities:',
+        err
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudieron consultar las comunidades.'
+      });
+
+    }
+
+  }
+);
+/* ============================================================
+   ADMIN — EDITAR REGISTRO
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.put(
+  '/api/admin/registrations/:id',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({
+          error: 'ID de registro inválido.'
+        });
+      }
+
+      const data = {
+        nombres:
+          clean(req.body.nombres),
+
+        apellido_paterno:
+          clean(req.body.apellido_paterno),
+
+        apellido_materno:
+          clean(req.body.apellido_materno),
+
+        tiene_dni:
+          ['true', '1', 1, true]
+            .includes(req.body.tiene_dni),
+
+        dni:
+          clean(req.body.dni)
+            .replace(/\D/g, ''),
+
+        celular:
+          clean(req.body.celular)
+            .replace(/\s+/g, ''),
+
+        comunidad:
+          clean(req.body.comunidad),
+
+        observaciones:
+          clean(req.body.observaciones),
+
+        estado:
+          req.body.estado === 'INACTIVO'
+            ? 'INACTIVO'
+            : 'ACTIVO'
+      };
+
+      if (
+        !data.nombres ||
+        !data.apellido_paterno ||
+        !data.apellido_materno ||
+        !data.celular ||
+        !data.comunidad
+      ) {
+        return res.status(400).json({
+          error:
+            'Completa todos los campos obligatorios.'
+        });
+      }
+
+      if (
+        data.tiene_dni &&
+        !/^\d{8}$/.test(data.dni)
+      ) {
+        return res.status(400).json({
+          error:
+            'El DNI debe contener exactamente 8 dígitos.'
+        });
+      }
+
+      if (!/^\d{9}$/.test(data.celular)) {
+        return res.status(400).json({
+          error:
+            'El celular debe contener 9 dígitos.'
+        });
+      }
+
+      /*
+       * Primero comprobamos que exista.
+       */
+
+      const existing =
+        await supabase
+          .from('registrations')
+          .select('id')
+          .eq('id', id)
+          .maybeSingle();
+
+      if (existing.error) {
+        throw existing.error;
+      }
+
+      if (!existing.data) {
+        return res.status(404).json({
+          error:
+            'El registro no existe.'
+        });
+      }
+
+      /*
+       * Actualización.
+       */
+
+      const {
+        data: updated,
+        error
+      } = await supabase
+        .from('registrations')
+        .update(data)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+
+        /*
+         * Control de DNI duplicado si existe
+         * una restricción UNIQUE.
+         */
+
+        if (
+          error.code === '23505' &&
+          error.message?.toLowerCase()
+            .includes('dni')
+        ) {
+          return res.status(409).json({
+            error:
+              'El DNI ya está registrado.'
+          });
+        }
+
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        data: updated
+      });
+
+    } catch (err) {
+
+      console.error(
+        'ERROR EDITANDO REGISTRO:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo actualizar el registro.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   ADMIN — CAMBIAR ESTADO
+   ============================================================ */
+
+app.patch(
+  '/api/admin/registrations/:id/status',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const id = Number(req.params.id);
+
+      const estado =
+        req.body.estado === 'INACTIVO'
+          ? 'INACTIVO'
+          : 'ACTIVO';
+
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({
+          error: 'ID inválido.'
+        });
+      }
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('registrations')
+        .update({ estado })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        data
+      });
+
+    } catch (err) {
+
+      console.error(
+        'ERROR CAMBIANDO ESTADO:',
+        err
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo cambiar el estado.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   ADMIN — CAMPAÑAS
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.get(
+  '/api/admin/campaigns',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const {
+        data: campaigns,
+        error: campaignError
+      } = await supabase
+        .from('campaigns')
+        .select('*')
+        .order('created_at', {
+          ascending: false
+        });
+
+      if (campaignError) {
+        throw campaignError;
+      }
+
+      const {
+        data: registrations,
+        error: registrationError
+      } = await supabase
+        .from('registrations')
+        .select('campaign_id,estado');
+
+      if (registrationError) {
+        throw registrationError;
+      }
+
+      const counts = new Map();
+
+      for (
+        const registration of
+        registrations || []
+      ) {
+
+        if (
+          registration.estado !==
+          'ACTIVO'
+        ) {
+          continue;
+        }
+
+        const campaignId =
+          Number(
+            registration.campaign_id
+          );
+
+        counts.set(
+          campaignId,
+          (counts.get(campaignId) || 0) + 1
+        );
+      }
+
+      const result =
+        (campaigns || []).map(c => ({
+
+          ...c,
+
+          total_registros:
+            counts.get(Number(c.id)) || 0
+
+        }));
+
+      res.json(result);
+
+    } catch (err) {
+
+      console.error(
+        'ERROR /api/admin/campaigns:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudieron consultar las campañas.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   ADMIN — CREAR CAMPAÑA
+   ============================================================ */
+
+app.post(
+  '/api/admin/campaigns',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const title =
+        clean(req.body.title);
+
+      const category =
+        clean(
+          req.body.category ||
+          'Inscripción'
+        );
+
+      const header_text =
+        clean(
+          req.body.header_text ||
+          'AHORA NACIÓN'
+        );
+
+      const description =
+        clean(req.body.description);
+
+      const share_message =
+        clean(req.body.share_message);
+
+      const og_title =
+        clean(req.body.og_title);
+
+      const og_description =
+        clean(req.body.og_description);
+
+      const is_active =
+        Boolean(req.body.is_active);
+
+      if (!title) {
+        return res.status(400).json({
+          error:
+            'El título es obligatorio.'
+        });
+      }
+
+      if (!share_message) {
+        return res.status(400).json({
+          error:
+            'El mensaje de WhatsApp es obligatorio.'
+        });
+      }
+
+      /*
+       * Generar slug estable.
+       */
+
+      let slug =
+        title
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80);
+
+      if (!slug) {
+        slug = `campana-${Date.now()}`;
+      }
+
+      const {
+        data: sameSlug,
+        error: slugError
+      } = await supabase
+        .from('campaigns')
+        .select('id')
+        .eq('slug', slug)
+        .maybeSingle();
+
+      if (slugError) {
+        throw slugError;
+      }
+
+      if (sameSlug) {
+        slug =
+          `${slug}-${Date.now()}`
+            .slice(0, 90);
+      }
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('campaigns')
+        .insert({
+          slug,
+          header_text,
+          title,
+          description,
+          category,
+          share_message,
+          og_title,
+          og_description,
+          og_image:
+            '/ahora-nacion-logo.svg',
+          is_active
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      res.status(201).json({
+        success: true,
+        data
+      });
+
+    } catch (err) {
+
+      console.error(
+        'ERROR CREANDO CAMPAÑA:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo crear la campaña.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   ADMIN — EDITAR CAMPAÑA
+   ============================================================ */
+
+app.put(
+  '/api/admin/campaigns/:id',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const id =
+        Number(req.params.id);
+
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({
+          error:
+            'ID de campaña inválido.'
+        });
+      }
+
+      const update = {};
+
+      if (
+        req.body.header_text !==
+        undefined
+      ) {
+        update.header_text =
+          clean(req.body.header_text);
+      }
+
+      if (
+        req.body.title !==
+        undefined
+      ) {
+        update.title =
+          clean(req.body.title);
+      }
+
+      if (
+        req.body.description !==
+        undefined
+      ) {
+        update.description =
+          clean(req.body.description);
+      }
+
+      if (
+        req.body.category !==
+        undefined
+      ) {
+        update.category =
+          clean(req.body.category);
+      }
+
+      if (
+        req.body.share_message !==
+        undefined
+      ) {
+        update.share_message =
+          clean(req.body.share_message);
+      }
+
+      if (
+        req.body.og_title !==
+        undefined
+      ) {
+        update.og_title =
+          clean(req.body.og_title);
+      }
+
+      if (
+        req.body.og_description !==
+        undefined
+      ) {
+        update.og_description =
+          clean(req.body.og_description);
+      }
+
+      if (
+        req.body.is_active !==
+        undefined
+      ) {
+        update.is_active =
+          Boolean(req.body.is_active);
+      }
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('campaigns')
+        .update(update)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        data
+      });
+
+    } catch (err) {
+
+      console.error(
+        'ERROR EDITANDO CAMPAÑA:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo actualizar la campaña.'
+      });
+
+    }
+
+  }
+);
+/* ============================================================
+   ADMIN — EXPORTAR CSV
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.get(
+  '/api/admin/export/csv',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('registrations')
+        .select(`
+          reg_number,
+          nombres,
+          apellido_paterno,
+          apellido_materno,
+          tiene_dni,
+          dni,
+          celular,
+          comunidad,
+          observaciones,
+          fecha_registro,
+          hora_registro,
+          estado,
+          campaigns (
+            title,
+            category
+          )
+        `)
+        .order('id', {
+          ascending: true
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      const rows = data || [];
+
+      const headers = [
+        'N° Registro',
+        'Nombres',
+        'Apellido Paterno',
+        'Apellido Materno',
+        'Tiene DNI',
+        'DNI',
+        'Celular',
+        'Comunidad',
+        'Observaciones',
+        'Fecha',
+        'Hora',
+        'Estado',
+        'Campaña',
+        'Categoría'
+      ];
+
+      const csvEscape = value => {
+
+        const text =
+          String(value ?? '');
+
+        return `"${text
+          .replace(/"/g, '""')}"`;
+      };
+
+      const lines = [
+        headers
+          .map(csvEscape)
+          .join(',')
+      ];
+
+      for (const r of rows) {
+
+        lines.push([
+          r.reg_number,
+          r.nombres,
+          r.apellido_paterno,
+          r.apellido_materno,
+          r.tiene_dni ? 'SI' : 'NO',
+          r.dni,
+          r.celular,
+          r.comunidad,
+          r.observaciones,
+          r.fecha_registro,
+          r.hora_registro,
+          r.estado,
+          r.campaigns?.title || '',
+          r.campaigns?.category || ''
+        ].map(csvEscape).join(','));
+
+      }
+
+      const csv =
+        '\uFEFF' +
+        lines.join('\r\n');
+
+      res.setHeader(
+        'Content-Type',
+        'text/csv; charset=utf-8'
+      );
+
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="registros-ahora-nacion.csv"'
+      );
+
+      res.send(csv);
+
+    } catch (err) {
+
+      console.error(
+        'ERROR EXPORTANDO CSV:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo generar el archivo CSV.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   ADMIN — EXPORTAR EXCEL
+   FUENTE OFICIAL: SUPABASE
+   ============================================================ */
+
+app.get(
+  '/api/admin/export/excel',
+  authMiddleware,
+  async (req, res) => {
+
+    try {
+
+      const {
+        data,
+        error
+      } = await supabase
+        .from('registrations')
+        .select(`
+          reg_number,
+          nombres,
+          apellido_paterno,
+          apellido_materno,
+          tiene_dni,
+          dni,
+          celular,
+          comunidad,
+          observaciones,
+          fecha_registro,
+          hora_registro,
+          estado,
+          campaigns (
+            title,
+            category
+          )
+        `)
+        .order('id', {
+          ascending: true
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      const rows =
+        (data || []).map(r => ({
+
+          'N° Registro':
+            r.reg_number,
+
+          'Nombres':
+            r.nombres,
+
+          'Apellido Paterno':
+            r.apellido_paterno,
+
+          'Apellido Materno':
+            r.apellido_materno,
+
+          'Tiene DNI':
+            r.tiene_dni ? 'SI' : 'NO',
+
+          'DNI':
+            r.dni || '',
+
+          'Celular':
+            r.celular || '',
+
+          'Comunidad':
+            r.comunidad || '',
+
+          'Observaciones':
+            r.observaciones || '',
+
+          'Fecha':
+            r.fecha_registro || '',
+
+          'Hora':
+            r.hora_registro || '',
+
+          'Estado':
+            r.estado || '',
+
+          'Campaña':
+            r.campaigns?.title || '',
+
+          'Categoría':
+            r.campaigns?.category || ''
+
+        }));
+
+      const workbook =
+        XLSX.utils.book_new();
+
+      const worksheet =
+        XLSX.utils.json_to_sheet(rows);
+
+      worksheet['!cols'] = [
+        { wch: 18 },
+        { wch: 20 },
+        { wch: 22 },
+        { wch: 22 },
+        { wch: 12 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 22 },
+        { wch: 35 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 42 },
+        { wch: 18 }
+      ];
+
+      XLSX.utils.book_append_sheet(
+        workbook,
+        worksheet,
+        'Registros'
+      );
+
+      const buffer =
+        XLSX.write(workbook, {
+          type: 'buffer',
+          bookType: 'xlsx'
+        });
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="registros-ahora-nacion.xlsx"'
+      );
+
+      res.send(buffer);
+
+    } catch (err) {
+
+      console.error(
+        'ERROR EXPORTANDO EXCEL:',
+        JSON.stringify(err, null, 2)
+      );
+
+      res.status(500).json({
+        error:
+          'No se pudo generar el archivo Excel.'
+      });
+
+    }
+
+  }
+);
+
+
+/* ============================================================
+   HEALTH CHECK
+   ============================================================ */
+
+app.get('/api/health', (req, res) => {
+
+  res.json({
+    ok: true,
+    app: APP_NAME,
+    server: 'online',
+    time: new Date().toISOString()
+  });
+
 });
 
-app.get('/health', (req,res)=>res.json({ok:true, service:'ahora-nacion-registro'}));
 
-app.listen(PORT,'0.0.0.0',()=>{
-  console.log(`${APP_NAME}`);
-  console.log(`Servidor: http://localhost:${PORT}`);
+/* ============================================================
+   MANEJO DE RUTAS API NO ENCONTRADAS
+   ============================================================ */
+
+app.use('/api', (req, res) => {
+
+  res.status(404).json({
+    error: 'Ruta API no encontrada.'
+  });
+
+});
+
+
+/* ============================================================
+   MANEJO GLOBAL DE ERRORES
+   ============================================================ */
+
+app.use((err, req, res, next) => {
+
+  console.error(
+    'ERROR GLOBAL DEL SERVIDOR:',
+    err
+  );
+
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  res.status(500).json({
+    error:
+      'Error interno del servidor.'
+  });
+
+});
+
+
+/* ============================================================
+   ARRANQUE
+   ============================================================ */
+
+app.listen(PORT, '0.0.0.0', () => {
+
+  console.log('');
+  console.log(APP_NAME);
+  console.log(
+    `Servidor: http://localhost:${PORT}`
+  );
+  console.log(
+    'Base de datos de registros: SUPABASE'
+  );
+  console.log(
+    'Base de datos de usuarios admin: SQLITE'
+  );
+  console.log('');
+
 });

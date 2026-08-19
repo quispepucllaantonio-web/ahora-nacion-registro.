@@ -1,9 +1,9 @@
-<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Administración – Ahora Nación</title><link rel="stylesheet" href="/admin/css/admin.css"></head>
+﻿<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/svg+xml" href="/ahora-nacion-logo.png"><title>Administración – Ahora Nación</title><link rel="stylesheet" href="/admin/css/admin.css"></head>
 <body>
-<div id="login" class="screen"><div class="login"><h1>AHORA NACIÓN</h1><p>Panel de administración</p><form id="loginForm"><input id="username" placeholder="Usuario" required><input id="password" type="password" placeholder="Contraseña" required><button>Ingresar</button><div id="loginMsg"></div></form></div></div>
+<div id="login" class="screen"><div class="login"><img src="/ahora-nacion-logo.png" alt="Ahora Nación" style="width:150px;max-width:70%;height:auto;display:block;margin:0 auto 15px;"><h1>AHORA NACIÓN</h1><p>Panel de administración</p><form id="loginForm"><input id="username" placeholder="Usuario" required><input id="password" type="password" placeholder="Contraseña" required><button>Ingresar</button><div id="loginMsg"></div></form></div></div>
 <div id="panel" class="hidden">
-<header><div><b>AHORA NACIÓN</b><span> Panel de administración</span></div><button id="logout">Salir</button></header>
+<header><div style="display:flex;align-items:center;gap:12px;"><img src="/ahora-nacion-logo.png" alt="Ahora Nación" style="width:65px;height:45px;object-fit:contain;"><div><b>AHORA NACIÓN</b><span> Panel de administración</span></div></div><button id="logout">Salir</button></header>
 <main>
 <section class="stats"><div><b id="total">0</b><span>Registros activos</span></div><div><b id="today">0</b><span>Registros hoy</span></div><div><b id="campaignCount">0</b><span>Campañas activas</span></div></section>
 <section class="toolbar"><input id="search" placeholder="Buscar nombre, DNI, celular o código"><select id="campaignFilter"><option value="">Todas las campañas</option></select><input id="communityFilter" placeholder="Comunidad"><button id="searchBtn">Buscar</button><button id="excelBtn">Excel</button><button id="csvBtn">CSV</button></section>
@@ -13,3 +13,6 @@
 </div>
 <div id="modal" class="hidden"></div>
 <script src="/admin/js/admin.js"></script></body></html>
+
+
+

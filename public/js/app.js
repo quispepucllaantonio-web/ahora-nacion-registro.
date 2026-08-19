@@ -1,4 +1,4 @@
-const app=document.getElementById('app');
+﻿const app=document.getElementById('app');
 const slug=app?.dataset?.slug || 'campana-general';
 let campaign=null;
 
@@ -13,7 +13,7 @@ async function load(){
 function render(){
   app.innerHTML=`
   <div class="hero">
-    <img src="/ahora-nacion-logo.svg" alt="Ahora Nación">
+    <img src="/ahora-nacion-logo.png" alt="Ahora Nación">
     <h1>${esc(campaign.title)}</h1>
     <p>${esc(campaign.description)}</p>
   </div>
@@ -55,8 +55,15 @@ async function submit(e){
     const r=await fetch('/api/public/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     const j=await r.json();
     if(!r.ok)throw new Error(j.error||'No se pudo registrar.');
-    const share=String(j.share_message||'').replace('[ENLACE]',location.href);
-    msg.innerHTML=`
+    let share = String(j.share_message || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\[ENLACE\]/g, location.href)
+    .replace(/\[NUMERO\]/g, j.reg_number);
+
+if (!share.includes(j.reg_number)) {
+    share = share.trim() + "\nN.º de inscripción: " + j.reg_number;
+}
+msg.innerHTML=`
       <div class="success">
         <h2>¡Registro realizado!</h2>
         <p>Tu registro fue guardado correctamente.</p>
@@ -69,3 +76,9 @@ async function submit(e){
   }catch(err){msg.innerHTML='<div class="error">'+esc(err.message)+'</div>';btn.disabled=false;btn.textContent='Registrar mis datos'}
 }
 load();
+
+
+
+
+
+
