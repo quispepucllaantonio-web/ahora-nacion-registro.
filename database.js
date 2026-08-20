@@ -102,19 +102,36 @@ function initDatabase() {
   }
 
   const username = process.env.ADMIN_USERNAME || 'admin';
-  const password = process.env.ADMIN_PASSWORD || 'Admin123!';
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  const configuredPassword = process.env.ADMIN_PASSWORD;
+
+  const existing = db.prepare(
+    'SELECT id FROM users WHERE username = ?'
+  ).get(username);
 
   if (!existing) {
+    const password = configuredPassword || 'Admin123!';
     const hash = bcrypt.hashSync(password, 12);
+
     db.prepare(`
       INSERT INTO users (username, password_hash, name, role)
       VALUES (?, ?, ?, 'ADMIN')
     `).run(username, hash, 'Administrador');
+
     console.log(`Usuario administrador creado: ${username}`);
+  } else if (configuredPassword) {
+    const hash = bcrypt.hashSync(configuredPassword, 12);
+
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?
+      WHERE username = ?
+    `).run(hash, username);
+
+    console.log(`Contraseña del usuario administrador actualizada: ${username}`);
   }
 }
 
 initDatabase();
 
 module.exports = db;
+
